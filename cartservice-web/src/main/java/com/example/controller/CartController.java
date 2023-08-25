@@ -1,7 +1,6 @@
 package com.example.controller;
 
 import com.example.CartService;
-
 import com.example.helper.Urls;
 import com.example.request.CartRequest;
 import com.example.response.BaseResponse;
@@ -30,7 +29,12 @@ public class CartController {
         return cartService.clearCart();
     }
 
-    @DeleteMapping(value = Urls.DELETE_ITEM)
+    @DeleteMapping(value = Urls.DELETE_ITEM + "/{productName}")
+    public BaseResponse<?> deleteCartItem(@RequestParam("guestId") String guestId, @PathVariable("productName") String productName) {
+        return cartService.deleteItem(guestId, productName);
+    }
+
+    @DeleteMapping(value = Urls.CLEAR_CART)
     public BaseResponse<List<ProductResponse>> clearCartItem(@RequestParam("guestId") String guestId) {
         return cartService.clearCartItems(guestId);
     }

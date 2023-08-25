@@ -32,13 +32,12 @@ public class CartServiceImpl implements CartService {
         try {
             Optional<Cart> optionalCart = cartRepository.findByGuestId(cartRequest.getGuestId());
             return optionalCart.map(cart -> {
-                        try {
-                            return ResponseEntity.ok(new BaseResponse<>(updateCartItem(cart, cartRequest), HttpStatus.OK.value(), null, true));
-                        } catch (OutOfQuantityException e) {
-                            return ResponseEntity.ok(new BaseResponse<>(null, HttpStatus.BAD_REQUEST.value(), e.getMessage(), false));
-                        }
-                    }
-            ).orElseGet(() -> {
+                try {
+                    return ResponseEntity.ok(new BaseResponse<>(updateCartItem(cart, cartRequest), HttpStatus.OK.value(), null, true));
+                } catch (OutOfQuantityException e) {
+                    return ResponseEntity.ok(new BaseResponse<>(null, HttpStatus.BAD_REQUEST.value(), e.getMessage(), false));
+                }
+            }).orElseGet(() -> {
                 try {
                     return ResponseEntity.ok(new BaseResponse<>(createCart(cartRequest), HttpStatus.OK.value(), null, true));
                 } catch (OutOfQuantityException e) {
@@ -54,7 +53,7 @@ public class CartServiceImpl implements CartService {
     public BaseResponse<String> clearCart() {
         try {
             cartRepository.deleteAll();
-            return new BaseResponse<>("Deleted Cart", HttpStatus.INTERNAL_SERVER_ERROR.value(), null, true);
+            return new BaseResponse<>("Deleted Cart", HttpStatus.OK.value(), null, true);
 
         } catch (Exception exception) {
             return new BaseResponse<>(null, HttpStatus.INTERNAL_SERVER_ERROR.value(), exception.getMessage(), false);
@@ -75,23 +74,78 @@ public class CartServiceImpl implements CartService {
     }
 
     @Override
+    public BaseResponse<?> deleteItem(String guestId, String productName) {
+        try {
+            Optional<Cart> optionalCart = cartRepository.findByGuestId(guestId);
+            return optionalCart.map(cart -> {
+                ProductResponse productResponse = cart.getCartProducts().get(guestId).stream().filter((product) -> product.getProductName().equals(productName)).findFirst().orElse(null);
+                if (Objects.nonNull(productResponse)) {
+                    cart.getCartProducts().get(guestId).remove(productResponse);
+                    cartRepository.save(cart);
+                    return new BaseResponse<>(cart.getCartProducts().get(guestId), HttpStatus.OK.value(), null, true);
+                } else {
+                    return new BaseResponse<>(null, HttpStatus.NO_CONTENT.value(), "No such product found in cart", false);
+                }
+            }).orElseGet(() -> new BaseResponse<>(null, HttpStatus.NO_CONTENT.value(), "No Cart found", false));
+        } catch (Exception exception) {
+            return new BaseResponse<>(null, HttpStatus.INTERNAL_SERVER_ERROR.value(), exception.getMessage(), false);
+        }
+    }
+
+    @Override
     public BaseResponse<List<ProductResponse>> viewCartItems(String guestId) {
         try {
             Optional<Cart> optionalCart = cartRepository.findByGuestId(guestId);
-            return optionalCart.map(cart -> new BaseResponse<>(cart.getCartProducts().get(guestId), HttpStatus.OK.value(), null, true)).orElseGet(() ->
-                    new BaseResponse<>(null, HttpStatus.NO_CONTENT.value(), "No cart is available for the guestID", false));
+            return optionalCart.map(cart -> new BaseResponse<>(cart.getCartProducts().get(guestId), HttpStatus.OK.value(), null, true)).orElseGet(() -> new BaseResponse<>(null, HttpStatus.NO_CONTENT.value(), "No cart is available for the guestID", false));
         } catch (Exception exception) {
             return new BaseResponse<>(null, HttpStatus.INTERNAL_SERVER_ERROR.value(), exception.getMessage(), false);
         }
     }
 
     private List<ProductResponse> createCart(CartRequest cartRequest) throws OutOfQuantityException {
-        ProductQuantityCheckResponse productQuantityCheckResponse = productQuantityCheck(cartRequest.getCartProduct());
-        if (productQuantityCheckResponse.isAvailable()) {
-            return createCartInDb(cartRequest, productQuantityCheckResponse);
-        } else {
-            throw new OutOfQuantityException(productQuantityCheckResponse.getMessage());
+        List<ProductRequest> productRequestList = new ArrayList<>();
+        productRequestList.add(cartRequest.getCartProduct());
+        return getProductAvailabilityAndConstructCart(productRequestList, cartRequest);
+    }
+
+    private List<ProductResponse> getProductAvailabilityAndConstructCart(List<ProductRequest> productRequestList, CartRequest cartRequest) {
+        String outOfStockError = "";
+        List<ProductResponse> productResponses = new ArrayList<>();
+        ProductQuantityCheckResponse[] productQuantityCheckResponse = productQuantityCheck(productRequestList);
+        for (ProductQuantityCheckResponse quantityCheckResponse : productQuantityCheckResponse) {
+            if (quantityCheckResponse.isAvailable()) {
+                productResponses = createCartInDb(cartRequest, quantityCheckResponse);
+            } else {
+                outOfStockError = quantityCheckResponse.getMessage();
+            }
         }
+        if (productResponses.size() != 0) {
+            return productResponses;
+        } else {
+            throw new OutOfQuantityException(outOfStockError);
+        }
+    }
+
+    private List<ProductResponse> getProductAvailabilityAndConstructCart(List<ProductRequest> productRequestList, CartRequest cartRequest, Cart cart) {
+        String outOfStockError = "";
+        Cart cartUpdate = null;
+        List<ProductResponse> productResponses = new ArrayList<>();
+        ProductQuantityCheckResponse[] productQuantityCheckResponse = productQuantityCheck(productRequestList);
+        for (ProductQuantityCheckResponse quantityCheckResponse : productQuantityCheckResponse) {
+            if (quantityCheckResponse.isAvailable()) {
+                cartUpdate = serializeCartRequest(cartRequest, cart, quantityCheckResponse.getProductResponse());
+                productResponses = migrateCartObjects(cartRepository.save(cartUpdate).getGuestId());
+            } else {
+                outOfStockError = quantityCheckResponse.getMessage();
+            }
+        }
+        if (productResponses.size() != 0) {
+            return productResponses;
+        }
+        if (outOfStockError.isEmpty()) {
+            outOfStockError = "Product not found";
+        }
+        throw new OutOfQuantityException(outOfStockError);
     }
 
     private List<ProductResponse> createCartInDb(CartRequest cartRequest, ProductQuantityCheckResponse productQuantityCheckResponse) {
@@ -113,18 +167,14 @@ public class CartServiceImpl implements CartService {
         return viewCartItems(guestId).getData();
     }
 
-    private ProductQuantityCheckResponse productQuantityCheck(ProductRequest productRequest) {
-        return restTemplate.postForEntity("http://localhost:8089/product/quantity", productRequest, ProductQuantityCheckResponse.class).getBody();
+    private synchronized <T> ProductQuantityCheckResponse[] productQuantityCheck(List<T> productRequest) {
+        return restTemplate.postForEntity("http://localhost:8089/product/quantity", productRequest, ProductQuantityCheckResponse[].class).getBody();
     }
 
     private List<ProductResponse> updateCartItem(Cart cart, CartRequest cartRequest) throws OutOfQuantityException {
-        ProductQuantityCheckResponse productQuantityCheckResponse = productQuantityCheck(cartRequest.getCartProduct());
-        if (productQuantityCheckResponse.isAvailable()) {
-            Cart cartItem = serializeCartRequest(cartRequest, cart, productQuantityCheckResponse.getProductResponse());
-            return migrateCartObjects(cartRepository.save(cartItem).getGuestId());
-        } else {
-            throw new OutOfQuantityException(productQuantityCheckResponse.getMessage());
-        }
+        List<ProductRequest> productRequestList = new ArrayList<>();
+        productRequestList.add(cartRequest.getCartProduct());
+        return getProductAvailabilityAndConstructCart(productRequestList, cartRequest, cart);
     }
 
     private Cart serializeCartRequest(CartRequest cartRequest, Cart cart, ProductResponse productResponse) {

@@ -13,7 +13,7 @@ public interface CartService {
     BaseResponse<String> clearCart();
 
     BaseResponse<List<ProductResponse>> clearCartItems(String guestId);
-
+    BaseResponse<?> deleteItem(String guestId, String productName);
     BaseResponse<List<ProductResponse>> viewCartItems(String guestId);
 
 

@@ -18,6 +18,10 @@
             <scope>compile</scope>
         </dependency>
         <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.example</groupId>
             <artifactId>cartservice-repository</artifactId>
             <version>0.0.1-SNAPSHOT</version>
